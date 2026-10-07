@@ -104,7 +104,7 @@ class CataasClient:
             logger.error(f'Не удалось получить изображение: {error}')
             return None
         else:
-            content_type = response.headers.get('Content-Type', '').split(';', 1)[0] 
+            content_type = response.headers.get('Content-Type', '').partition(';')[0] 
             if not content_type.startswith('image/'):
                 raise ValueError(
                     f'Сервер вернул не изображение, '
