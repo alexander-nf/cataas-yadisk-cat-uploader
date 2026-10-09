@@ -128,6 +128,87 @@ class YaDiskClient:
         self.base = api_url
         self.folder = folder
 
+    def _is_folder_exists(self) -> bool | None:
+        params = {'path': f'/{self.folder}'}
+        request_url = f'{self.base}'
+
+        logger.info(f'Проверка наличия каталога "{self.folder}" на Я.Диске')
+
+        try:
+            response = requests.get(
+                request_url,
+                params=params,
+                headers=self.headers,
+                timeout=settings.http_timeout,
+            )
+        except (requests.RequestException, ValueError) as error:
+            logger.error(f'Не удалось осуществить проверку: {error}')
+        else:
+            match response.status_code:
+                case 200:
+                    resource_type = response.json()['type']
+                    if resource_type == 'dir':
+                        logger.info(f'Каталог "{self.folder}" найден на Я.Диске')
+                        return True
+                    else:
+                        logger.error(
+                            f'Найден объект типа {resource_type} с именем "{self.folder}". '
+                            f'Я.Диск не позволяет создавать объекты с одинаковымим именами: '
+                            f'невозможно создать каталог "{self.folder}" на Я.Диске'
+                        )
+                case 401:
+                    logger.error('Ошибка авторизации на Я.Диске или не задан токен')
+                case 404:
+                    logger.warning(f'Каталог "{self.folder}" отсутствует на Я.Диске')
+                    return False
+                case _:
+                    logger.error(f'Я.Диск вернул код ответа {response.status_code}')
+
+        return None
+
+    def _create_folder(self) -> bool:
+        params = {'path': f'/{self.folder}'}
+        request_url = f'{self.base}'
+
+        logger.info(f'Отправлен запрос на создание каталога "{self.folder}" на Я.Диске')
+
+        response = requests.put(
+            request_url,
+            params=params,
+            headers=self.headers,
+            timeout=settings.http_timeout
+        )
+        
+        match response.status_code:
+            case 201: 
+                logger.info(f'Каталог "{self.folder}" создан на Я.Диске') 
+                return True
+            case 401:
+                logger.error('Ошибка авторизации на Я.Диске или не задан токен')
+            case 409:
+                logger.error('Одноимённый каталог уже существует на Яндекс.Диске')
+            case _:
+                logger.error(
+                    f'Не удалось создать каталог "{self.folder}" на Я.Диске: '
+                    f'HTTP-код ответа {response.status_code}'
+                )
+
+        return False
+
+    def _ensure_folder_exists(self) -> bool:
+        folder_exists_status = self._is_folder_exists()
+
+        if folder_exists_status == None:
+            logger.error(
+                f'Невозможно подключить или создать каталог "{self.folder}" на Я.Диске'
+            )
+            return False
+        
+        if folder_exists_status:
+            return True
+        else:
+            return self._create_folder()
+        
     def get_download_url(self, file_name: str) -> tuple[str | None, bool]:
         params = {'path': f'/{self.folder}/{file_name}'}
         request_url = f'{self.base}/download/'
@@ -167,7 +248,8 @@ class YaDiskClient:
         }
         request_url = f'{self.base}/upload/'
 
-        logger.info(f'Запрос ссылки для загрузки на Я.Диск файла "{file_name}"')       
+        logger.info(f'Запрос ссылки для загрузки файла "{file_name}" на Я.Диск')
+
         try:
             response = requests.get(
                 request_url,
@@ -230,7 +312,8 @@ class YaDiskClient:
         else:
             logger.error(
                 f'Не удалось загрузить файл на Я.Диск: '
-                f'HTTP-код ответа {response.status_code}')
+                f'HTTP-код ответа {response.status_code}'
+            )
             return False
 
     def upload_file(self, file_name: str, content: bytes) -> bool | None:
@@ -360,12 +443,28 @@ if __name__ == "__main__":
     logger.debug(f'Настройки приложения:\n{settings}')
 
     cataas_client = CataasClient(settings.cataas_api_url)
-    
+
+    ya_disk_target_folder = input(
+        f'Если требуется, измените название каталога на Я.Диске для загрузки изображений.\n'
+        f'Название по умолчанию - "{settings.netology_group_id}": '
+    )
+
+    if not ya_disk_target_folder:
+        ya_disk_target_folder = settings.netology_group_id
+
+    ya_disk_target_folder = sanitize_filename(ya_disk_target_folder)
+
+    logger.info(f'Задан каталог хранения "{ya_disk_target_folder}" на Я.Диске')
+
     ya_disk_client = YaDiskClient(
         settings.ya_disk_api_url,
         settings.ya_disk_token,
-        settings.netology_group_id
+        ya_disk_target_folder
     )
+
+    if not ya_disk_client._ensure_folder_exists():
+        logger.error('Завершение программы.')
+        raise SystemExit(1)
 
     report = ReportService(ya_disk_client)
 
